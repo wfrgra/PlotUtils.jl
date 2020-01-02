@@ -386,3 +386,120 @@ function optimize_datetime_ticks(a_min::Real, a_max::Real;
 
     return Dates.value.(ticks), labels
 end
+
+#   Implements the axis labeling routine described in 
+#   Talbot, Lin, and Hanrahan. An Extension of Wilkinson’s Algorithm for Positioning Tick Labels on Axes, Infovis 2010.
+#   http://vis.stanford.edu/files/2010-TickLabels-InfoVis.pdf
+
+Q = [ 1, 5, 2, 2.5, 4, 3]
+w = [ 0.25, 0.2, 0.5, 0.05] 
+ 
+function simplicity( i, n,  j,  lmin, lmax, lstep)
+    eps = 1e-10
+    #Detect whether zero is included in the ticks
+    v = (lmin - lstep * floor(lmin / lstep) < eps && lmin <= 0 && lmax >= 0) ? 1 : 0;
+    
+    if (n <= 1)
+        1.0 - j + v;
+    else
+        1.0 - (i - 1) / (n - 1) - j + v;
+    end
+end
+
+function max_simplicity( i, n, j)
+    simplicity(i,n,j,-1,1,1)
+end
+
+function coverage( dmin, dmax, lmin, lmax)
+    1.0 - 0.5 * (((dmax - lmax)^2 + (dmin - lmin)^2) / ((0.1 * (dmax - dmin))^2 ))
+end
+
+function max_coverage( dmin, dmax, span, extreme_ticks)
+
+    range = dmax - dmin;
+    if (span > range)
+        half = (span - range) / 2
+        1.0 -  half^2 / ((0.1 * (dmax - dmin)) * (0.1 * (dmax - dmin)))
+    else
+        extreme_ticks ? -1 : 1
+    end
+end
+
+function density( r, rt)
+    2 - max(r / rt, rt / r)
+end
+
+function max_density(r, rt)
+    if (r >= rt)
+        2 - r / rt
+    else
+        1.0
+    end
+end
+
+function optimize_ticks2(dmin::T, dmax::T;
+    space::Number=30, target_density::AbstractFloat=.1, extreme_ticks::Bool=false,
+    simplicity_weight::AbstractFloat=.25, coverage_weight::AbstractFloat=.2,
+    density_weight::AbstractFloat=0.5, legibility_weight::AbstractFloat=.05,
+    Q = [ 1, 5, 2, 2.5, 4, 3]) where T
+    println("min $dmin, max $dmax space $space")
+    tick_type = typeof(dmin)
+
+    (dmax <= dmin) && return ([0.0],-1.0,1.0)
+
+    S_best = Array{tick_type}(undef, )
+    best_score = -2.0
+    w = [ simplicity_weight, coverage_weight, density_weight, legibility_weight]
+
+    for j in 1:100, (i,q) in enumerate(Q)
+        sm = max_simplicity(i, length(Q), j)
+        if (w[1] * sm + w[2] + w[3] + w[4] < best_score)
+            break
+        end
+
+        k = 2
+        while k < 100
+        
+            dm = max_density(k/space, target_density)
+
+            if (w[1] * sm + w[2] + w[3] * dm + w[4] < best_score)
+                break
+            end
+            delta = (dmax - dmin) / (k + 1) / (j * q)
+            
+            z = ceil(typeof(k),log10(delta))
+
+            while z < 100
+            
+                step = j * q * 10.0^z
+                cm = max_coverage(dmin, dmax, step * (k - 1),extreme_ticks)
+
+                if (w[1] * sm + w[2] * cm + w[3] * dm + w[4] < best_score)
+                    break
+                end
+                for start in (floor(typeof(k), dmax / step - (k - 1)) * j) :1: (ceil(typeof(k), dmin / step) * j)
+                    lmin = start * step / j
+                    lmax = lmin + step * (k - 1)
+
+                    s = simplicity(i, length(Q), j, lmin, lmax, step)
+                    d = density(k/space, target_density)
+                    c = coverage(dmin, dmax, lmin, lmax)
+                    score = w[1] * s + w[2] * c + w[3] * d + w[4]
+                    #TODO: add label legibility score in here
+                    if (score > best_score)
+                        best_score = score
+                        S_best = collect(lmin:step:lmax)
+                    end
+                end
+                z += 1
+            end
+            k += 1
+        end
+    end
+    
+    if (best_score == -2.0)
+        return ([0],-1,1)
+    else
+        return (S_best, min(S_best[1],dmin),max(S_best[end],dmax))
+    end
+end

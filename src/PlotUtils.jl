@@ -33,6 +33,7 @@ include("adapted_grid.jl")
 
 export
     optimize_ticks,
+    optimize_ticks2,
     optimize_datetime_ticks
 
 include("ticks.jl")
